@@ -1,0 +1,6 @@
+ideas
+- both launching and attaching
+- watchpoints
+- reverse debugging
+- multithreaded programs
+- memcheck, massif
