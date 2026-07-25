@@ -37,14 +37,14 @@ int main(int argc, char* argv[]) {
             printf("ptrace error\n");
             return 1;
         }
-        execv(program, child_args.data());
+        execvp(program, child_args.data());
         perror("Target program launch failed!\n");
         return 1;
     }
     
     // debugger
     else {
-        Debugger debugger{ pid };
+        Debugger debugger{ pid, program };
         CLI cli{ debugger };
 
         // handle ctrl-c

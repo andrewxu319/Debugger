@@ -14,11 +14,15 @@ namespace debugger
             { "run", [](Debugger& debugger, const std::vector<std::string_view>& args) {
                 // debugger.run();
             } },
+            { "continue", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+                debugger.cont();
+            } },
             { "break", [](Debugger& debugger, const std::vector<std::string_view>& args) {
                 // debugger.add_breakpoint();
             } },
-            { "reg", [](Debugger& debugger, const std::vector<std::string_view>& args) {
-                // debugger.run();
+            { "reg", [this](Debugger& debugger, const std::vector<std::string_view>& args) {
+                auto it{ this->regs_.find(args[1]) };
+                debugger.print_reg(it->second);
             } },
             { "quit", [](Debugger& debugger, const std::vector<std::string_view>& args) {
             } }
@@ -34,6 +38,8 @@ namespace debugger
 
     void CLI::split_input()
     {
+        args_.clear();
+
         size_t start{};
         while (true) {
             start = input_.find_first_not_of(' ', start);
@@ -51,7 +57,7 @@ namespace debugger
     
     void CLI::prompt()
     {
-        printf("> ");
+        printf(">> ");
         std::getline(std::cin, input_);
         input_view_ = input_;
         split_input();

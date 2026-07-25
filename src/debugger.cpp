@@ -1,5 +1,7 @@
 #include "debugger.h"
 
+#include "LIEF/ELF.hpp"
+
 #include <cstdio>
 #include <unistd.h>
 #include <signal.h>
@@ -10,12 +12,18 @@
 
 namespace debugger
 {
-    Debugger::Debugger(int pid)
-        : pid_{ pid },
+    Debugger::Debugger(int pid, const char* program)
+        : regs_{},
+        pid_{ pid },
         wait_status_{},
-        regs_{}
+        debug_info_{ *[] (const char* program) {
+            auto elf = LIEF::ELF::Parser::parse(std::string{ program });
+            if (const LIEF::dwarf::DebugInfo* info = elf->debug_info()->as<LIEF::dwarf::DebugInfo>()) {
+            return info;
+            }
+        }(program) },
+        breakpoints_{}
     {
-        
     }
     
     Debugger::~Debugger()
@@ -40,8 +48,45 @@ namespace debugger
     void Debugger::cont()
     {
         ptrace(PTRACE_CONT, pid_, nullptr, nullptr);
+        waitpid(pid_, &wait_status_, 0);
 
-        // if hit breakpoint, return
+        // program runs
+
+        // breakpoint hit
+        reg_read();
+        reg_write(&regs_.rip, regs_.rip - 1);
+    }
+    
+    void Debugger::breakpoint(word addr)
+    {
+        breakpoints_[addr] = ptrace(PTRACE_PEEKTEXT, pid_, addr);
+        ptrace(PTRACE_POKETEXT, pid_, addr, 0xcc);
+    }
+
+    void Debugger::breakpoint(const char* fn_name)
+    {
+        auto fn{ debug_info_.find_function(fn_name) };
+        auto fn_addr{ fn->address() };
+        if (fn_addr)
+        {
+            breakpoint(fn_addr.value());
+        }
+        else
+        {
+            ;
+        }
+    }
+    
+    void Debugger::print_reg(const word* reg)
+    {
+        reg_read();
+        printf("0x%016llX (%lld)\n", *reg, *reg);
+    }
+    
+    void Debugger::reg_write(word* reg, word data)
+    {
+        *reg = data;
+        ptrace(PTRACE_SETREGS, pid_, nullptr, &regs_);
     }
     
     void Debugger::reg_read()

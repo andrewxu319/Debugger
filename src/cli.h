@@ -32,6 +32,6 @@ namespace debugger {
 
         using Handler = std::function<void(Debugger&, const std::vector<std::string_view>& args)>;
         std::unordered_map<std::string, Handler, StringViewHash, std::equal_to<>> commands_;
-        std::unordered_map<std::string, unsigned long long*, StringViewHash, std::equal_to<>> regs_;
+        std::unordered_map<std::string, word*, StringViewHash, std::equal_to<>> regs_;
     };
 }
