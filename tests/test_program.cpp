@@ -4,11 +4,17 @@
 
 using namespace std::chrono_literals;
 
-int main() {
-    int counter{};
-    while (true) {
+namespace test_namespace {
+    void count(int& counter) {
         printf("%d\n", counter);
         std::this_thread::sleep_for(1s);
         counter++;
+    }
+}
+
+int main() {
+    int counter{};
+    while (true) {
+        test_namespace::count(counter);
     }
 }

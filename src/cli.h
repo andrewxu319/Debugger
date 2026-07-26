@@ -1,7 +1,9 @@
 #pragma once
 
 #include "debugger.h"
-#include "global.h"
+
+#include "utils/global.h"
+#include "utils/string_view_hash.h"
 
 #include <array>
 #include <functional>
@@ -16,14 +18,6 @@ namespace debugger {
         void prompt();
 
     private:
-        // hash by string_view
-        struct StringViewHash {
-            using is_transparent = void;
-            size_t operator() (std::string_view sv) const {
-                return std::hash<std::string_view>{}(sv);
-            }
-        };
-
         Debugger& debugger_;
         static constexpr size_t MAX_ARGS = 4;
         std::string input_;
@@ -31,7 +25,7 @@ namespace debugger {
         std::vector<std::string_view> args_;
 
         using Handler = std::function<void(Debugger&, const std::vector<std::string_view>& args)>;
-        std::unordered_map<std::string, Handler, StringViewHash, std::equal_to<>> commands_;
-        std::unordered_map<std::string, unsigned long long*, StringViewHash, std::equal_to<>> regs_;
+        std::unordered_map<std::string, Handler, utils::StringViewHash, std::equal_to<>> commands_;
+        std::unordered_map<std::string, word*, utils::StringViewHash, std::equal_to<>> regs_;
     };
 }
