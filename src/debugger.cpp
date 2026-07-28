@@ -154,16 +154,26 @@ namespace debugger
             mangled_buffer_.push_back('\0');
 
             size_t demangled_buffer_size_{ demangled_buffer_capacity_ };
+            const char* name_data;
+            size_t name_size;
             if (!demangler_.partialDemangle(mangled_buffer_.data())) {
                 if (!demangler_.isFunction()) continue;
                 demangler_.getFunctionBaseName(demangled_buffer_, &demangled_buffer_size_);
-                uint64_t fn_size{ object::ELFSymbolRef{ sym_ }.getSize() };
-                msymtabs_.try_emplace(std::string{ demangled_buffer_, demangled_buffer_size_ }, FnSym{ *vaddr, fn_size });
+                name_data = demangled_buffer_;
+                name_size = demangled_buffer_size_;
 
             } else {
-                uint64_t fn_size{ object::ELFSymbolRef{ sym_ }.getSize() };
-                msymtabs_.try_emplace(std::string{ name->str(), name->size() }, FnSym{ *vaddr, fn_size });
+                name_data = name->str().data();
+                name_size = name->size();
             }
+
+            // for hashing purposes
+            if (name_size > 0 && name_data[name_size - 1] == '\0') {
+                name_size--;
+            }
+
+            uint64_t fn_size{ object::ELFSymbolRef{ sym_ }.getSize() };
+            msymtabs_.try_emplace(std::string{ name_data, name_size }, FnSym{ *vaddr, fn_size });
 
         }
     }
