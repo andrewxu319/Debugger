@@ -3,8 +3,9 @@
 #include "utils/global.h"
 #include "utils/string_view_hash.h"
 
-#include "elf++.hh"
-#include "dwarf++.hh"
+#include <llvm/DebugInfo/DWARF/DWARFContext.h>
+#include <llvm/Demangle/Demangle.h>
+#include <llvm/Object/ObjectFile.h>
 
 #include <memory>
 #include <sys/user.h>
@@ -27,27 +28,30 @@ namespace debugger {
         struct user_regs_struct regs_;
 
     private:
-        struct ElfSymAddrSize {
+        // function symbol
+        struct FnSym {
             word vaddr;
             uint64_t size;
         };
-        
-        struct ElfSymNameSize {
-            std::string name;
-            uint64_t size;
-        };
 
-        std::unique_ptr<char, void(*)(void*)> demangle(const char* fn_name);
-        void build_symbol_map();
+        // int find_fn_vaddr(std::string_view fn_name);
+        void build_msymtabs();
         void reg_read();
 
         int pid_;
         int wait_status_;
         word base_addr_;
-        elf::elf elf_;
-        dwarf::dwarf dwarf_;
-        std::unordered_map<std::string, ElfSymAddrSize, utils::StringViewHash, std::equal_to<>> vaddr_by_fn_;
-        std::unordered_map<word, ElfSymNameSize> fn_by_vaddr_;
+
+        llvm::object::OwningBinary<llvm::object::ObjectFile> obj_file_;
+        llvm::object::ObjectFile* obj_;
+        std::unique_ptr<llvm::DWARFContext> dwarf_ctx_;
+        llvm::ItaniumPartialDemangler demangler_;
+
+        llvm::SmallString<256> mangled_buffer_;
+        static constexpr size_t demangled_buffer_capacity_ = 128;
+        char demangled_buffer_[demangled_buffer_capacity_]; // does this need to be malloc'ed?
+        
+        std::unordered_map<std::string, FnSym, utils::StringViewHash, std::equal_to<>> msymtabs_;
         std::unordered_map<word, word> breakpoints_;
     };
 }

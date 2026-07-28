@@ -1,5 +1,9 @@
 #include "debugger.h"
 
+#include <llvm/DebugInfo/DWARF/DWARFAcceleratorTable.h>
+#include <llvm/Object/ELFObjectFile.h>
+#include <llvm/Object/ObjectFile.h>
+
 #include <cstdio>
 #include <cxxabi.h>
 #include <fcntl.h>
@@ -10,22 +14,33 @@
 #include <thread>
 #include <chrono>
 
+using namespace llvm;
+
 namespace debugger
 {
     Debugger::Debugger(int pid, const char* program)
         : regs_{},
         pid_{ pid },
         wait_status_{},
-        vaddr_by_fn_{},
-        breakpoints_{}
+        msymtabs_{},
+        breakpoints_{},
+        demangler_{},
+        mangled_buffer_{},
+        demangled_buffer_{}
     {
-        int file_descriptor{ open(program, O_RDONLY) };
-        elf_ = elf::elf{ elf::create_mmap_loader(file_descriptor) };
-        dwarf_ = dwarf::dwarf{ dwarf::elf::create_loader(elf_) };
-
-        build_symbol_map();
+        auto obj_file_expected{ object::ObjectFile::createObjectFile(program) };
+        if (!obj_file_expected) {
+            consumeError(obj_file_expected.takeError());
+            printf("Failed to open LLVM object file!\n");
+            return;
+        }
+        obj_file_ = std::move(*obj_file_expected);
+        obj_ = obj_file_.getBinary();
+        dwarf_ctx_ = DWARFContext::create(*obj_);
+        
+        build_msymtabs();
     }
-    
+
     Debugger::~Debugger()
     {
         if (!WIFEXITED(wait_status_) && !WIFSIGNALED(wait_status_)) {
@@ -77,8 +92,8 @@ namespace debugger
 
     void Debugger::breakpoint(std::string_view fn_name)
     {
-        auto it{ vaddr_by_fn_.find(fn_name) };
-        if (it == vaddr_by_fn_.end())
+        auto it{ msymtabs_.find(fn_name) };
+        if (it == msymtabs_.end())
         {
             printf("Function not found!\n");
             // search thru dwarf objects
@@ -101,46 +116,55 @@ namespace debugger
         ptrace(PTRACE_SETREGS, pid_, nullptr, &regs_);
     }
     
-    std::unique_ptr<char, void(*)(void*)> Debugger::demangle(const char* fn_name)
+    void Debugger::build_msymtabs()
     {
-        int status{};
-        std::unique_ptr<char, void(*)(void*)>demangled_name{ abi::__cxa_demangle(fn_name, NULL, NULL, &status), std::free };
-        if (status != 0) {
-            demangled_name.reset();
-        }
-        return demangled_name;
-    }
-    
-    void Debugger::build_symbol_map()
-    {
-/*
-eventually: parse through index files
-        try {
-            const elf::section& gdb_index_section{ elf_.get_section(".gdb_index") };
-            std::string_view gdb_index{ static_cast<const char*>(gdb_index_section.data()), gdb_index_section.size() };
-        } catch (const std::out_of_range&) {
-            const elf::section& debug_names_section{ elf_.get_section(".debug_names") };
-            std::string_view debug_names{ static_cast<const char*>(debug_names_section.data()), debug_names_section.size() };
-        }
-*/
-        for (elf::section section : elf_.sections()) {
-            if (section.get_hdr().type == elf::sht::symtab /*|| section.get_hdr().type == elf::sht::dynsym*/) {
-                for (elf::sym sym : section.as_symtab()) {
-                    auto& data{ sym.get_data() };
-                    if (data.type() == elf::stt::func) {
-                        std::string mangled_name{ sym.get_name() };
-                        std::unique_ptr<char, void(*)(void*)> demangled_name_unique_ptr{ demangle(mangled_name.data()) };
-                        if (demangled_name_unique_ptr) {
-                            std::string demangled_name{ demangled_name_unique_ptr.get() };
-                            vaddr_by_fn_[demangled_name] = { data.value, data.size };
-                            fn_by_vaddr_[data.value] = { demangled_name, data.size };
-                        } else {
-                            vaddr_by_fn_[mangled_name] = { data.value, data.size };
-                            fn_by_vaddr_[data.value] = { mangled_name, data.size };
-                        }
-                    }
-                }
+        for (const object::SymbolRef& sym_ : obj_->symbols()) {
+            Expected<object::SymbolRef::Type> type{ sym_.getType() };
+            if (!type) {
+                consumeError(type.takeError());
+                continue;
             }
+            if (*type != object::SymbolRef::ST_Function) {
+                continue;
+            }
+
+            Expected<StringRef> name{ sym_.getName() };
+            if (!name) {
+                consumeError(name.takeError());
+                continue;
+            }
+            if (name->empty()) {
+                continue;
+            }
+
+            Expected<word> vaddr{ sym_.getAddress() };
+            if (!vaddr) {
+                consumeError(vaddr.takeError());
+                continue;
+            }
+            if (!*vaddr) {
+                continue;
+            }
+
+            if (name.get().size() >= mangled_buffer_.capacity()) {
+                printf("Mangled function name is too long!\n");
+                continue;
+            }
+            mangled_buffer_.assign(*name);
+            mangled_buffer_.push_back('\0');
+
+            size_t demangled_buffer_size_{ demangled_buffer_capacity_ };
+            if (!demangler_.partialDemangle(mangled_buffer_.data())) {
+                if (!demangler_.isFunction()) continue;
+                demangler_.getFunctionBaseName(demangled_buffer_, &demangled_buffer_size_);
+                uint64_t fn_size{ object::ELFSymbolRef{ sym_ }.getSize() };
+                msymtabs_.try_emplace(std::string{ demangled_buffer_, demangled_buffer_size_ }, FnSym{ *vaddr, fn_size });
+
+            } else {
+                uint64_t fn_size{ object::ELFSymbolRef{ sym_ }.getSize() };
+                msymtabs_.try_emplace(std::string{ name->str(), name->size() }, FnSym{ *vaddr, fn_size });
+            }
+
         }
     }
     

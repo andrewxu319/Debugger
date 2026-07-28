@@ -4,32 +4,17 @@ Project(Debugger LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 
-# libelfin
-include(ExternalProject)
+#
+find_package(LLVM REQUIRED CONFIG)
 
-set(LIBELFIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libs/libelfin")
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 
-ExternalProject_Add(libelfin_build
-    SOURCE_DIR        "${LIBELFIN_DIR}"
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND     make
-    BUILD_IN_SOURCE   1
-    INSTALL_COMMAND   ""
-)
+include_directories(${LLVM_INCLUDE_DIRS})
+separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
+add_definitions(${LLVM_DEFINITIONS_LIST})
 
-add_library(dwarf++ STATIC IMPORTED)
-set_target_properties(dwarf++ PROPERTIES
-    IMPORTED_LOCATION "${LIBELFIN_DIR}/dwarf/libdwarf++.a"
-    INTERFACE_INCLUDE_DIRECTORIES "${LIBELFIN_DIR}/dwarf;${LIBELFIN_DIR}/elf"
-)
-add_dependencies(dwarf++ libelfin_build)
-
-add_library(elf++ STATIC IMPORTED)
-set_target_properties(elf++ PROPERTIES
-    IMPORTED_LOCATION "${LIBELFIN_DIR}/elf/libelf++.a"
-    INTERFACE_INCLUDE_DIRECTORIES "${LIBELFIN_DIR}/dwarf;${LIBELFIN_DIR}/elf"
-)
-add_dependencies(elf++ libelfin_build)
+llvm_map_components_to_libnames(llvm_libs DebugInfoDWARF Object Support MC)
 ##
 
 add_subdirectory(src)
