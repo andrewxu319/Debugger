@@ -34,7 +34,7 @@ namespace debugger {
             uint64_t size;
         };
 
-        // int find_fn_vaddr(std::string_view fn_name);
+        void get_base_addr();
         void build_msymtabs();
         void reg_read();
 

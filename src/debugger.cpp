@@ -7,12 +7,12 @@
 #include <cstdio>
 #include <cxxabi.h>
 #include <fcntl.h>
-#include <unistd.h>
+#include <fstream>
 #include <signal.h>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <thread>
-#include <chrono>
+#include <unistd.h>
 
 using namespace llvm;
 
@@ -22,6 +22,7 @@ namespace debugger
         : regs_{},
         pid_{ pid },
         wait_status_{},
+        base_addr_{},
         msymtabs_{},
         breakpoints_{},
         demangler_{},
@@ -58,6 +59,8 @@ namespace debugger
         }
         
         ptrace(PTRACE_SETOPTIONS, pid_, nullptr, PTRACE_O_EXITKILL);
+
+        get_base_addr();
     }
     
     void Debugger::cont()
@@ -114,6 +117,20 @@ namespace debugger
     {
         *reg = data;
         ptrace(PTRACE_SETREGS, pid_, nullptr, &regs_);
+    }
+    
+    void Debugger::get_base_addr()
+    {
+        std::string maps_path{ "/proc/" + std::to_string(pid_) + "/maps" };
+        std::ifstream maps_file{ maps_path };
+        std::string line;
+        if (getline(maps_file, line)) {
+            size_t dash_idx{ line.find('-') };
+            if (dash_idx != std::string::npos) {
+                std::string start_addr_str{ line.substr(0, dash_idx) };
+                base_addr_ = std::stoull(start_addr_str, nullptr, 16);
+            }
+        }
     }
     
     void Debugger::build_msymtabs()
