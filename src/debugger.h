@@ -54,7 +54,7 @@ namespace debugger {
         char demangled_buffer_[demangled_buffer_capacity_]; // does this need to be malloc'ed?
         
         struct Breakpoint {
-            word content; // not necessarily the instruction because instructions are variable length
+            byte data; // not necessarily the instruction because instructions are variable length
             const std::pair<const std::string, FnSym>* symbol;
         };
         std::unordered_map<std::string, FnSym, utils::StringViewHash, std::equal_to<>> msymtabs_;

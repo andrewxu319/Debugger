@@ -88,7 +88,7 @@ namespace debugger
     
     void Debugger::breakpoint(word vaddr, const std::pair<const std::string, FnSym>& symbol)
     {
-        breakpoints_.emplace_back(std::make_unique<Breakpoint>(static_cast<word>(ptrace(PTRACE_PEEKTEXT, pid_, vaddr)), &symbol));
+        breakpoints_.emplace_back(std::make_unique<Breakpoint>(static_cast<byte>(ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_) & 0xFF), &symbol));
         breakpoints_lookup_[vaddr] = breakpoints_.back().get();
         breakpoints_sorted_ = false;
        
@@ -114,9 +114,11 @@ namespace debugger
     void Debugger::del(size_t idx)
     {
         word vaddr{ breakpoints_[idx]->symbol->second.vaddr };
-        ptrace(PTRACE_POKETEXT, pid_, vaddr + base_addr_, breakpoints_[idx]->content); // not working yets
+        word old_word{ ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_) };
+        word new_word{ (old_word & 0xffffffffffffff00) | static_cast<word>(breakpoints_[idx]->data) };
+        ptrace(PTRACE_POKETEXT, pid_, vaddr + base_addr_, new_word);
         breakpoints_lookup_.erase(vaddr);
-        breakpoints_.erase(breakpoints_.begin() + idx);
+        breakpoints_.erase(breakpoints_.begin() + idx); // might need to rewind pc
     }
     
     void Debugger::info(std::string_view cmd)
@@ -132,11 +134,12 @@ namespace debugger
                         return a->symbol->second.vaddr < b->symbol->second.vaddr;
                     }
                 );
+                breakpoints_sorted_ = true;
             }
 
             printf("Breakpoints:\n");
             for (const std::unique_ptr<Breakpoint>& breakpoint : breakpoints_) {
-                printf("Function: %s, virtual address: 0x%016llX (%llu), word content: 0x%016llX (%llu)\n", breakpoint->symbol->first.c_str(), breakpoint->symbol->second.vaddr, breakpoint->content);
+                printf("Function: %s, virtual address: 0x%016llX (%llu), byte data: 0x%02hhX (%hhu)\n", breakpoint->symbol->first.c_str(), breakpoint->symbol->second.vaddr, breakpoint->data);
             }
         }
     }
