@@ -4,6 +4,7 @@
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cxxabi.h>
 #include <fcntl.h>
@@ -24,6 +25,7 @@ namespace debugger
         wait_status_{},
         base_addr_{},
         msymtabs_{},
+        breakpoints_lookup_{},
         breakpoints_{},
         demangler_{},
         mangled_buffer_{},
@@ -66,9 +68,9 @@ namespace debugger
     void Debugger::cont()
     {
         reg_read();
-        if (breakpoints_.contains(regs_.rip - 1)) {
+        if (breakpoints_lookup_.contains(regs_.rip - 1)) {
             reg_write(&regs_.rip, regs_.rip - 1);
-            ptrace(PTRACE_POKETEXT, pid_, regs_.rip, breakpoints_[regs_.rip]);
+            ptrace(PTRACE_POKETEXT, pid_, regs_.rip, breakpoints_lookup_[regs_.rip]->symbol->second.vaddr);
             ptrace(PTRACE_SINGLESTEP, pid_, nullptr, nullptr);
             waitpid(pid_, &wait_status_, 0);
             word old_word{ ptrace(PTRACE_PEEKTEXT, pid_, regs_.rip) };
@@ -84,9 +86,11 @@ namespace debugger
         // breakpoint hit
     }
     
-    void Debugger::breakpoint(word vaddr)
+    void Debugger::breakpoint(word vaddr, const std::pair<const std::string, FnSym>& symbol)
     {
-        breakpoints_[vaddr] = ptrace(PTRACE_PEEKTEXT, pid_, vaddr);
+        breakpoints_.emplace_back(std::make_unique<Breakpoint>(static_cast<word>(ptrace(PTRACE_PEEKTEXT, pid_, vaddr)), &symbol));
+        breakpoints_lookup_[vaddr] = breakpoints_.back().get();
+        breakpoints_sorted_ = false;
        
         word old_word{ ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_) };
         word new_word{ (old_word & 0xffffffffffffff00) | 0xcc };
@@ -103,14 +107,44 @@ namespace debugger
         }
         else
         {
-            breakpoint(it->second.vaddr);
+            breakpoint(it->second.vaddr, (*it));
+        }
+    }
+    
+    void Debugger::del(size_t idx)
+    {
+        word vaddr{ breakpoints_[idx]->symbol->second.vaddr };
+        ptrace(PTRACE_POKETEXT, pid_, vaddr + base_addr_, breakpoints_[idx]->content); // not working yets
+        breakpoints_lookup_.erase(vaddr);
+        breakpoints_.erase(breakpoints_.begin() + idx);
+    }
+    
+    void Debugger::info(std::string_view cmd)
+    {
+        if (cmd == "break") {
+            // number of breakpoints is most likely too small to justify doing anything fancy (at least for now)
+            if (!breakpoints_sorted_) {
+                // sort by vaddr
+                std::sort(
+                    breakpoints_.begin(),
+                    breakpoints_.end(), 
+                    [] (const std::unique_ptr<Breakpoint>& a, const std::unique_ptr<Breakpoint>& b) {
+                        return a->symbol->second.vaddr < b->symbol->second.vaddr;
+                    }
+                );
+            }
+
+            printf("Breakpoints:\n");
+            for (const std::unique_ptr<Breakpoint>& breakpoint : breakpoints_) {
+                printf("Function: %s, virtual address: 0x%016llX (%llu), word content: 0x%016llX (%llu)\n", breakpoint->symbol->first.c_str(), breakpoint->symbol->second.vaddr, breakpoint->content);
+            }
         }
     }
     
     void Debugger::print_reg(const word* reg)
     {
         reg_read();
-        printf("0x%016llX (%lld)\n", *reg, *reg);
+        printf("0x%016llX (%lld)\n", *reg, *reg); // print signed value
     }
     
     void Debugger::reg_write(word* reg, word data)

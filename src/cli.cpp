@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <stdio.h>
+#include <string>
 
 namespace debugger
 {
@@ -19,6 +20,12 @@ namespace debugger
             } },
             { "break", [](Debugger& debugger, const std::vector<std::string_view>& args) {
                 debugger.breakpoint(args[1]);
+            } },
+            { "del", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+                debugger.del(std::stoi(args[1].data()));
+            } },
+            { "info", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+                debugger.info(args[1]);
             } },
             { "reg", [this](Debugger& debugger, const std::vector<std::string_view>& args) {
                 auto it{ this->regs_.find(args[1]) };

@@ -14,26 +14,28 @@
 
 namespace debugger {
     class Debugger {
-    public:
-        Debugger(int pid, const char* program);
-        ~Debugger();
-
-        void init();
-        void cont();
-        void breakpoint(word vaddr);
-        void breakpoint(std::string_view fn_name);
-        void print_reg(const word* reg);
-        void reg_write(word* reg, word data);
-        
-        struct user_regs_struct regs_;
-
-    private:
         // function symbol
         struct FnSym {
             word vaddr;
             uint64_t size;
         };
 
+    public:
+        Debugger(int pid, const char* program);
+        ~Debugger();
+
+        void init();
+        void cont();
+        void breakpoint(word vaddr, const std::pair<const std::string, FnSym>& symbol);
+        void breakpoint(std::string_view fn_name);
+        void del(size_t idx);
+        void info(std::string_view cmd);
+        void print_reg(const word* reg);
+        void reg_write(word* reg, word data);
+        
+        struct user_regs_struct regs_;
+
+    private:
         void get_base_addr();
         void build_msymtabs();
         void reg_read();
@@ -51,7 +53,13 @@ namespace debugger {
         static constexpr size_t demangled_buffer_capacity_ = 128;
         char demangled_buffer_[demangled_buffer_capacity_]; // does this need to be malloc'ed?
         
+        struct Breakpoint {
+            word content; // not necessarily the instruction because instructions are variable length
+            const std::pair<const std::string, FnSym>* symbol;
+        };
         std::unordered_map<std::string, FnSym, utils::StringViewHash, std::equal_to<>> msymtabs_;
-        std::unordered_map<word, word> breakpoints_;
+        std::unordered_map<word, Breakpoint*> breakpoints_lookup_; // index by vaddr
+        std::vector<std::unique_ptr<Breakpoint>> breakpoints_;
+        bool breakpoints_sorted_;
     };
 }
