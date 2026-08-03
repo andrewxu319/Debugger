@@ -4,6 +4,7 @@
 #include "utils/string_view_hash.h"
 
 #include <llvm/DebugInfo/DWARF/DWARFContext.h>
+#include <llvm/DebugInfo/Symbolize/Symbolize.h>
 #include <llvm/Demangle/Demangle.h>
 #include <llvm/Object/ObjectFile.h>
 
@@ -26,12 +27,13 @@ namespace debugger {
 
         void init();
         void cont();
-        void breakpoint(word vaddr, const std::pair<const std::string, FnSym>& symbol);
-        void breakpoint(std::string_view fn_name);
+        void breakpoint(word vaddr);
+        void breakpoint(std::string_view arg);
+        void breakpoint(std::string_view file_name, size_t line);
         void del(size_t idx);
         void info(std::string_view cmd);
         void print_reg(const word* reg);
-        void reg_write(word* reg, word data);
+        void set_reg(word* reg, word data);
         
         struct user_regs_struct regs_;
 
@@ -39,6 +41,7 @@ namespace debugger {
         void get_base_addr();
         void build_msymtabs();
         void reg_read();
+        void set_byte(word vaddr, byte val);
 
         int pid_;
         int wait_status_;
@@ -48,14 +51,16 @@ namespace debugger {
         llvm::object::ObjectFile* obj_;
         std::unique_ptr<llvm::DWARFContext> dwarf_ctx_;
         llvm::ItaniumPartialDemangler demangler_;
+        llvm::symbolize::LLVMSymbolizer symbolizer_;
 
         llvm::SmallString<256> mangled_buffer_;
         static constexpr size_t demangled_buffer_capacity_ = 128;
         char demangled_buffer_[demangled_buffer_capacity_]; // does this need to be malloc'ed?
         
         struct Breakpoint {
+            llvm::DILineInfo info;
+            word vaddr;
             byte data; // not necessarily the instruction because instructions are variable length
-            const std::pair<const std::string, FnSym>* symbol;
         };
         std::unordered_map<std::string, FnSym, utils::StringViewHash, std::equal_to<>> msymtabs_;
         std::unordered_map<word, Breakpoint*> breakpoints_lookup_; // index by vaddr

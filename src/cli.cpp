@@ -1,5 +1,6 @@
 #include "cli.h"
 
+#include <charconv>
 #include <iostream>
 #include <stdio.h>
 #include <string>
@@ -27,16 +28,39 @@ namespace debugger
             { "info", [](Debugger& debugger, const std::vector<std::string_view>& args) {
                 debugger.info(args[1]);
             } },
-            { "reg", [this](Debugger& debugger, const std::vector<std::string_view>& args) {
+            { "print", [this](Debugger& debugger, const std::vector<std::string_view>& args) {
                 auto it{ this->regs_.find(args[1]) };
                 debugger.print_reg(it->second);
+            } },
+            { "set", [this](Debugger& debugger, const std::vector<std::string_view>& args) {
+                auto it{ this->regs_.find(args[1]) };
+
+                word val;
+                bool success{ true };
+                if (args[2].starts_with("0x")) {
+                    auto [_, exception] { std::from_chars(args[2].data(), args[2].data() + args[2].size(), val, 16) };
+                    if (exception != std::errc()) {
+                        success = false;
+                    }
+                } else {
+                    auto [_, exception] { std::from_chars(args[2].data(), args[2].data() + args[2].size(), val) };
+                    if (exception != std::errc()) {
+                        success = false;
+                    }
+                }
+
+                if (success) {
+                    debugger.set_reg(it->second, val);
+                } else {
+                    printf("Invalid input!");
+                }
             } },
             { "quit", [](Debugger& debugger, const std::vector<std::string_view>& args) {
             } }
         },
         regs_{
-            { "rip", &debugger_.regs_.rip },
-            { "rsp", &debugger_.regs_.rsp }
+            { "$rip", &debugger_.regs_.rip },
+            { "$rsp", &debugger_.regs_.rsp }
             // add more
         }
     {

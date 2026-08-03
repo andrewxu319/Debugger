@@ -5,6 +5,7 @@
 #include <llvm/Object/ObjectFile.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cstdio>
 #include <cxxabi.h>
 #include <fcntl.h>
@@ -28,6 +29,7 @@ namespace debugger
         breakpoints_lookup_{},
         breakpoints_{},
         demangler_{},
+        symbolizer_{},
         mangled_buffer_{},
         demangled_buffer_{}
     {
@@ -68,14 +70,15 @@ namespace debugger
     void Debugger::cont()
     {
         reg_read();
-        if (breakpoints_lookup_.contains(regs_.rip - 1)) {
-            reg_write(&regs_.rip, regs_.rip - 1);
-            ptrace(PTRACE_POKETEXT, pid_, regs_.rip, breakpoints_lookup_[regs_.rip]->symbol->second.vaddr);
+        word v_rip{ regs_.rip - base_addr_ };
+        word v_rip_rewinded{ v_rip - 1 };
+        // need to check if debuggee is stopped by a sigtrap
+        if (breakpoints_lookup_.contains(v_rip_rewinded)) {
+            set_reg(&regs_.rip, v_rip_rewinded + base_addr_);
+            set_byte(v_rip_rewinded, breakpoints_lookup_[v_rip_rewinded]->data);
             ptrace(PTRACE_SINGLESTEP, pid_, nullptr, nullptr);
             waitpid(pid_, &wait_status_, 0);
-            word old_word{ ptrace(PTRACE_PEEKTEXT, pid_, regs_.rip) };
-            word new_word{ (old_word & 0xffffffffffffff00) | 0xcc };
-            ptrace(PTRACE_POKETEXT, pid_, regs_.rip, new_word);
+            set_byte(v_rip_rewinded, 0xcc);
         }
 
         ptrace(PTRACE_CONT, pid_, nullptr, nullptr);
@@ -86,39 +89,105 @@ namespace debugger
         // breakpoint hit
     }
     
-    void Debugger::breakpoint(word vaddr, const std::pair<const std::string, FnSym>& symbol)
+    void Debugger::breakpoint(word vaddr)
     {
-        breakpoints_.emplace_back(std::make_unique<Breakpoint>(static_cast<byte>(ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_) & 0xFF), &symbol));
+        object::SectionedAddress sectioned_address{ vaddr, object::SectionedAddress::UndefSection };
+        auto expected_info{ symbolizer_.symbolizeCode(*obj_, sectioned_address) };
+        if (!expected_info) {
+            consumeError(expected_info.takeError());
+        }
+        
+        breakpoints_.emplace_back(std::make_unique<Breakpoint>(
+            expected_info.get(),
+            vaddr,
+            static_cast<byte>(ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_) & 0xFF)
+        ));
         breakpoints_lookup_[vaddr] = breakpoints_.back().get();
         breakpoints_sorted_ = false;
        
-        word old_word{ ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_) };
-        word new_word{ (old_word & 0xffffffffffffff00) | 0xcc };
-        ptrace(PTRACE_POKETEXT, pid_, vaddr + base_addr_, new_word);
+        set_byte(vaddr, 0xcc);
     }
 
-    void Debugger::breakpoint(std::string_view fn_name)
+    void Debugger::breakpoint(std::string_view arg)
     {
-        auto it{ msymtabs_.find(fn_name) };
-        if (it == msymtabs_.end())
-        {
-            printf("Function not found!\n");
-            // search thru dwarf objects
+        size_t colon_pos{ arg.find(':') };
+        if (colon_pos == std::string::npos) {
+            auto it{ msymtabs_.find(arg) };
+            if (it == msymtabs_.end())
+            {
+                printf("Function not found!\n");
+                // search thru dwarf objects
+            }
+            else
+            {
+                breakpoint(it->second.vaddr);
+            }
+        } else {
+            // break at line
+            std::string_view file_name{ arg.substr(0, colon_pos) };
+            std::string_view line_sv{ arg.substr(colon_pos + 1) };
+            size_t line;
+            auto [_, exception] { std::from_chars(line_sv.data(), line_sv.data() + line_sv.size(), line) };
+            if (exception == std::errc()) {
+                breakpoint(file_name, line);
+            } else {
+                printf("Invalid line number!\n");
+            }
         }
-        else
-        {
-            breakpoint(it->second.vaddr, (*it));
+    }
+    
+    void Debugger::breakpoint(std::string_view file_name, size_t line)
+    {
+        bool found{ false };
+        word vaddr;
+
+        // find the line's vaddr
+        for (const auto& cu : dwarf_ctx_->compile_units()) {
+            const DWARFDebugLine::LineTable* line_table{ dwarf_ctx_->getLineTableForUnit(cu.get()) };
+            if (!line_table) continue;
+            for (const auto& row : line_table->Rows) {
+                std::string row_file_name{};
+                if (line_table->getFileNameByIndex(
+                    row.File,
+                    cu->getCompilationDir(),
+                    llvm::DILineInfoSpecifier::FileLineInfoKind::BaseNameOnly, // todo: disambiguate if multiple matches
+                    row_file_name)
+                ) {
+                    if (row.Line == line && row_file_name == file_name) {
+                        // if (found) {
+                        //     printf("Found multiple results!");
+                        // }
+
+                        found = true;
+                        vaddr = row.Address.Address;
+                        break;
+                    }
+                }
+            }
         }
+
+        if (!found) {
+            printf("Didn't find line!\n");
+        }
+
+        breakpoint(vaddr);
     }
     
     void Debugger::del(size_t idx)
     {
-        word vaddr{ breakpoints_[idx]->symbol->second.vaddr };
-        word old_word{ ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_) };
-        word new_word{ (old_word & 0xffffffffffffff00) | static_cast<word>(breakpoints_[idx]->data) };
-        ptrace(PTRACE_POKETEXT, pid_, vaddr + base_addr_, new_word);
+        if (idx >= breakpoints_.size()) {
+            printf("Invalid index!\n");
+        }
+        word vaddr{ breakpoints_[idx]->vaddr };
+        set_byte(vaddr, breakpoints_[idx]->data);
         breakpoints_lookup_.erase(vaddr);
-        breakpoints_.erase(breakpoints_.begin() + idx); // might need to rewind pc
+        breakpoints_.erase(breakpoints_.begin() + idx);
+
+        // if we're on the deleted breakpoint right now, rip needs to be rewound
+        reg_read();
+        if (vaddr + base_addr_ == regs_.rip - 1) {
+            set_reg(&regs_.rip, regs_.rip - 1);
+        }
     }
     
     void Debugger::info(std::string_view cmd)
@@ -131,7 +200,7 @@ namespace debugger
                     breakpoints_.begin(),
                     breakpoints_.end(), 
                     [] (const std::unique_ptr<Breakpoint>& a, const std::unique_ptr<Breakpoint>& b) {
-                        return a->symbol->second.vaddr < b->symbol->second.vaddr;
+                        return a->vaddr < b->vaddr;
                     }
                 );
                 breakpoints_sorted_ = true;
@@ -139,7 +208,13 @@ namespace debugger
 
             printf("Breakpoints:\n");
             for (const std::unique_ptr<Breakpoint>& breakpoint : breakpoints_) {
-                printf("Function: %s, virtual address: 0x%016llX (%llu), byte data: 0x%02hhX (%hhu)\n", breakpoint->symbol->first.c_str(), breakpoint->symbol->second.vaddr, breakpoint->data);
+                printf(
+                    "File: %s, Line: %d, virtual address: 0x%016llX (%llu), byte data: 0x%02hhX (%hhu)\n",
+                    sys::path::filename(breakpoint->info.FileName).data(),
+                    breakpoint->info.Line,
+                    breakpoint->vaddr,
+                    breakpoint->data
+                );
             }
         }
     }
@@ -150,7 +225,7 @@ namespace debugger
         printf("0x%016llX (%lld)\n", *reg, *reg); // print signed value
     }
     
-    void Debugger::reg_write(word* reg, word data)
+    void Debugger::set_reg(word* reg, word data)
     {
         *reg = data;
         ptrace(PTRACE_SETREGS, pid_, nullptr, &regs_);
@@ -235,6 +310,13 @@ namespace debugger
     void Debugger::reg_read()
     {
         ptrace(PTRACE_GETREGS, pid_, nullptr, &regs_);
+    }
+    
+    void Debugger::set_byte(word vaddr, byte val)
+    {
+        word old_word{ ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_) };
+        word new_word{ (old_word & 0xffffffffffffff00) | val };
+        ptrace(PTRACE_POKETEXT, pid_, vaddr + base_addr_, new_word);        
     }
 }
 
