@@ -9,6 +9,10 @@ namespace namespace_0 {
         printf("namespace_0::count, %d\n", counter);
         std::this_thread::sleep_for(0.5s);
         counter++;
+        counter++;
+        counter++;
+        counter++;
+        printf("ok\n");
     }
 }
 

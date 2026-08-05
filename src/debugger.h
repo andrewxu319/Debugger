@@ -34,37 +34,42 @@ namespace debugger {
         void info(std::string_view cmd);
         void print_reg(const word* reg);
         void set_reg(word* reg, word data);
+        void step();
+        void next();
         
-        struct user_regs_struct regs_;
+        struct user_regs_struct regs_{};
 
     private:
         void get_base_addr();
         void build_msymtabs();
         void reg_read();
         void set_byte(word vaddr, byte val);
+        bool step_through_breakpoint(word v_rip);
+        llvm::DWARFDebugLine::Row get_src_row_info(word vaddr);
 
-        int pid_;
-        int wait_status_;
-        word base_addr_;
+        int pid_{};
+        int wait_status_{};
+        word base_addr_{};
 
-        llvm::object::OwningBinary<llvm::object::ObjectFile> obj_file_;
-        llvm::object::ObjectFile* obj_;
-        std::unique_ptr<llvm::DWARFContext> dwarf_ctx_;
-        llvm::ItaniumPartialDemangler demangler_;
-        llvm::symbolize::LLVMSymbolizer symbolizer_;
+        llvm::object::OwningBinary<llvm::object::ObjectFile> obj_file_{};
+        llvm::object::ObjectFile* obj_{};
+        std::unique_ptr<llvm::DWARFContext> dwarf_ctx_{};
+        llvm::ItaniumPartialDemangler demangler_{};
+        llvm::symbolize::LLVMSymbolizer symbolizer_{};
+        llvm::DWARFCompileUnit* current_cu_{}; // TODO: update the current cu if needed
 
-        llvm::SmallString<256> mangled_buffer_;
+        llvm::SmallString<256> mangled_buffer_{};
         static constexpr size_t demangled_buffer_capacity_ = 128;
-        char demangled_buffer_[demangled_buffer_capacity_]; // does this need to be malloc'ed?
+        char demangled_buffer_[demangled_buffer_capacity_]{}; // does this need to be malloc'ed?
         
         struct Breakpoint {
             llvm::DILineInfo info;
             word vaddr;
             byte data; // not necessarily the instruction because instructions are variable length
         };
-        std::unordered_map<std::string, FnSym, utils::StringViewHash, std::equal_to<>> msymtabs_;
-        std::unordered_map<word, Breakpoint*> breakpoints_lookup_; // index by vaddr
-        std::vector<std::unique_ptr<Breakpoint>> breakpoints_;
-        bool breakpoints_sorted_;
+        std::unordered_map<std::string, FnSym, utils::StringViewHash, std::equal_to<>> msymtabs_{};
+        std::unordered_map<word, Breakpoint*> breakpoints_lookup_{}; // index by vaddr
+        std::vector<std::unique_ptr<Breakpoint>> breakpoints_{};
+        bool breakpoints_sorted_{};
     };
 }

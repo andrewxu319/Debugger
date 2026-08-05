@@ -28,9 +28,16 @@ namespace debugger
             { "info", [](Debugger& debugger, const std::vector<std::string_view>& args) {
                 debugger.info(args[1]);
             } },
+            { "next", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+                debugger.next();
+            } },
             { "print", [this](Debugger& debugger, const std::vector<std::string_view>& args) {
                 auto it{ this->regs_.find(args[1]) };
-                debugger.print_reg(it->second);
+                if (it == this->regs_.end()) {
+                    printf("Invalid print target!");
+                } else {
+                    debugger.print_reg(it->second);
+                }
             } },
             { "set", [this](Debugger& debugger, const std::vector<std::string_view>& args) {
                 auto it{ this->regs_.find(args[1]) };
@@ -55,7 +62,11 @@ namespace debugger
                     printf("Invalid input!");
                 }
             } },
+            { "step", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+                debugger.step();
+            } },
             { "quit", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+                ;
             } }
         },
         regs_{

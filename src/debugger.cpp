@@ -1,6 +1,7 @@
 #include "debugger.h"
 
 #include <llvm/DebugInfo/DWARF/DWARFAcceleratorTable.h>
+#include <llvm/DebugInfo/DWARF/DWARFCompileUnit.h>
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 
@@ -21,17 +22,7 @@ using namespace llvm;
 namespace debugger
 {
     Debugger::Debugger(int pid, const char* program)
-        : regs_{},
-        pid_{ pid },
-        wait_status_{},
-        base_addr_{},
-        msymtabs_{},
-        breakpoints_lookup_{},
-        breakpoints_{},
-        demangler_{},
-        symbolizer_{},
-        mangled_buffer_{},
-        demangled_buffer_{}
+        : pid_{ pid }
     {
         auto obj_file_expected{ object::ObjectFile::createObjectFile(program) };
         if (!obj_file_expected) {
@@ -71,15 +62,8 @@ namespace debugger
     {
         reg_read();
         word v_rip{ regs_.rip - base_addr_ };
-        word v_rip_rewinded{ v_rip - 1 };
-        // need to check if debuggee is stopped by a sigtrap
-        if (breakpoints_lookup_.contains(v_rip_rewinded)) {
-            set_reg(&regs_.rip, v_rip_rewinded + base_addr_);
-            set_byte(v_rip_rewinded, breakpoints_lookup_[v_rip_rewinded]->data);
-            ptrace(PTRACE_SINGLESTEP, pid_, nullptr, nullptr);
-            waitpid(pid_, &wait_status_, 0);
-            set_byte(v_rip_rewinded, 0xcc);
-        }
+        step_through_breakpoint(v_rip);
+        // need to check if debuggee was stopped by a sigtrap
 
         ptrace(PTRACE_CONT, pid_, nullptr, nullptr);
         waitpid(pid_, &wait_status_, 0);
@@ -87,6 +71,11 @@ namespace debugger
         // program  
 
         // breakpoint hit
+
+        // reg_read();
+        // assert(breakpoints_lookup_.contains(regs_.rip - base_addr_));
+        // // LATER: UPDATE CURRENT CU PROPERLY
+        // current_cu_ = breakpoints_lookup_[regs_.rip - base_addr_]->info.
     }
     
     void Debugger::breakpoint(word vaddr)
@@ -142,8 +131,9 @@ namespace debugger
         word vaddr;
 
         // find the line's vaddr
-        for (const auto& cu : dwarf_ctx_->compile_units()) {
-            const DWARFDebugLine::LineTable* line_table{ dwarf_ctx_->getLineTableForUnit(cu.get()) };
+        for (const std::unique_ptr<llvm::DWARFUnit>& unit : dwarf_ctx_->compile_units()) {
+            if (llvm::DWARFCompileUnit* cu{ llvm::dyn_cast<llvm::DWARFCompileUnit>(unit.get()) }) {
+                const DWARFDebugLine::LineTable* line_table{ dwarf_ctx_->getLineTableForUnit(cu) };
             if (!line_table) continue;
             for (const auto& row : line_table->Rows) {
                 std::string row_file_name{};
@@ -161,6 +151,7 @@ namespace debugger
                         found = true;
                         vaddr = row.Address.Address;
                         break;
+                        }
                     }
                 }
             }
@@ -229,6 +220,35 @@ namespace debugger
     {
         *reg = data;
         ptrace(PTRACE_SETREGS, pid_, nullptr, &regs_);
+    }
+    
+    void Debugger::step()
+    {
+        
+    }
+    
+    void Debugger::next()
+    {
+        // assumptions: not starting at end of function. no function calls / returns involved
+
+        reg_read();
+        word start_vaddr{ regs_.rip - base_addr_ };
+        llvm::DWARFDebugLine::Row start_row{ get_src_row_info(start_vaddr) };
+        if (!step_through_breakpoint(start_vaddr)) {
+            ptrace(PTRACE_SINGLESTEP, pid_, nullptr, nullptr);
+            waitpid(pid_, &wait_status_, 0);
+        }
+        while (true) {
+            reg_read();
+            word current_vaddr{ regs_.rip - base_addr_ };
+            llvm::DWARFDebugLine::Row current_row{ get_src_row_info(current_vaddr) };
+            if (current_row.File == start_row.File && current_row.Line > start_row.Line) { // todo: check if we exited current function & went to a function with larger vaddr
+                return;
+            } else {
+                ptrace(PTRACE_SINGLESTEP, pid_, nullptr, nullptr);
+                waitpid(pid_, &wait_status_, 0);
+            }
+        }
     }
     
     void Debugger::get_base_addr()
@@ -317,6 +337,34 @@ namespace debugger
         word old_word{ ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_) };
         word new_word{ (old_word & 0xffffffffffffff00) | val };
         ptrace(PTRACE_POKETEXT, pid_, vaddr + base_addr_, new_word);        
+    }
+    
+    // v_rip: current pc. address of 0xcc, + 1 (unrewinded)
+    bool Debugger::step_through_breakpoint(word v_rip)
+    {
+        word v_rip_rewinded{ v_rip - 1 };
+        bool is_breakpoint{ breakpoints_lookup_.contains(v_rip_rewinded) };
+        if (is_breakpoint) {
+            set_reg(&regs_.rip, v_rip_rewinded + base_addr_);
+            set_byte(v_rip_rewinded, breakpoints_lookup_[v_rip_rewinded]->data);
+            ptrace(PTRACE_SINGLESTEP, pid_, nullptr, nullptr);
+            waitpid(pid_, &wait_status_, 0);
+            set_byte(v_rip_rewinded, 0xcc);
+        }
+
+        return is_breakpoint;
+    }
+    
+    llvm::DWARFDebugLine::Row Debugger::get_src_row_info(word vaddr)
+    {
+        // maybe read rip again?
+        // cache current cu?
+        current_cu_ = dwarf_ctx_->getCompileUnitForCodeAddress(vaddr);
+        assert(current_cu_);
+
+        const auto& line_table{ *dwarf_ctx_->getLineTableForUnit(current_cu_) };
+        uint32_t row_idx{ line_table.lookupAddress(llvm::object::SectionedAddress{ vaddr }) };
+        return line_table.Rows[row_idx];
     }
 }
 
