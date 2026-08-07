@@ -7,31 +7,31 @@
 
 namespace debugger
 {
-    CLI::CLI(Debugger& debugger)
+    CLI::CLI([[maybe_unused]] Debugger& debugger)
         : debugger_{ debugger },
         input_{},
         input_view_{},
         args_{},
         commands_{
-            { "run", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+            { "run", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 // debugger.run();
             } },
-            { "continue", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+            { "continue", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 debugger.cont();
             } },
-            { "break", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+            { "break", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 debugger.breakpoint(args[1]);
             } },
-            { "del", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+            { "del", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 debugger.del(std::stoi(args[1].data()));
             } },
-            { "info", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+            { "info", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 debugger.info(args[1]);
             } },
-            { "next", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+            { "next", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 debugger.next();
             } },
-            { "print", [this](Debugger& debugger, const std::vector<std::string_view>& args) {
+            { "print", [this]([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 auto it{ this->regs_.find(args[1]) };
                 if (it == this->regs_.end()) {
                     printf("Invalid print target!");
@@ -39,7 +39,7 @@ namespace debugger
                     debugger.print_reg(it->second);
                 }
             } },
-            { "set", [this](Debugger& debugger, const std::vector<std::string_view>& args) {
+            { "set", [this]([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 auto it{ this->regs_.find(args[1]) };
 
                 word val;
@@ -62,10 +62,10 @@ namespace debugger
                     printf("Invalid input!");
                 }
             } },
-            { "step", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+            { "step", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 debugger.step();
             } },
-            { "quit", [](Debugger& debugger, const std::vector<std::string_view>& args) {
+            { "quit", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 ;
             } }
         },

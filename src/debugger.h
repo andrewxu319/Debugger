@@ -1,5 +1,6 @@
 #pragma once
 
+#include "disassembler.h"
 #include "utils/global.h"
 #include "utils/string_view_hash.h"
 
@@ -47,12 +48,14 @@ namespace debugger {
         bool step_through_breakpoint(word v_rip);
         llvm::DWARFDebugLine::Row get_src_row_info(word vaddr);
 
+        Disassembler disassembler_{};
+
         int pid_{};
         int wait_status_{};
         word base_addr_{};
 
         llvm::object::OwningBinary<llvm::object::ObjectFile> obj_file_{};
-        llvm::object::ObjectFile* obj_{};
+        const llvm::object::ObjectFile* obj_{};
         std::unique_ptr<llvm::DWARFContext> dwarf_ctx_{};
         llvm::ItaniumPartialDemangler demangler_{};
         llvm::symbolize::LLVMSymbolizer symbolizer_{};

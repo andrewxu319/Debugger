@@ -33,6 +33,8 @@ namespace debugger
         obj_file_ = std::move(*obj_file_expected);
         obj_ = obj_file_.getBinary();
         dwarf_ctx_ = DWARFContext::create(*obj_);
+
+        disassembler_.setup(obj_);
         
         build_msymtabs();
     }
@@ -81,13 +83,13 @@ namespace debugger
     void Debugger::breakpoint(word vaddr)
     {
         object::SectionedAddress sectioned_address{ vaddr, object::SectionedAddress::UndefSection };
-        auto expected_info{ symbolizer_.symbolizeCode(*obj_, sectioned_address) };
-        if (!expected_info) {
-            consumeError(expected_info.takeError());
+        auto info{ symbolizer_.symbolizeCode(*obj_, sectioned_address) }; // this stores source file name and line number
+        if (!info) {
+            consumeError(info.takeError());
         }
         
         breakpoints_.emplace_back(std::make_unique<Breakpoint>(
-            expected_info.get(),
+            info.get(),
             vaddr,
             static_cast<byte>(ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_) & 0xFF)
         ));
@@ -242,13 +244,34 @@ namespace debugger
         }
         while (true) {
             reg_read();
-            word current_vaddr{ regs_.rip - base_addr_ };
-            llvm::DWARFDebugLine::Row current_row{ get_src_row_info(current_vaddr) };
-            if (current_row.File == start_row.File && current_row.Line > start_row.Line) { // todo: check if we exited current function & went to a function with larger vaddr
+            word current_inst_vaddr{ regs_.rip - base_addr_ };
+            Disassembler::Inst inst{ disassembler_.analyze_inst(current_inst_vaddr) };
+            if (disassembler_.is_call(inst)) {
+                // call
+                // lightweight break()
+                size_t current_inst_size{ inst.size };
+                word temp_breakpoint_vaddr{ current_inst_vaddr + current_inst_size };
+                byte temp_breakpoint_data{ static_cast<byte>(ptrace(PTRACE_PEEKTEXT, pid_, temp_breakpoint_vaddr + base_addr_) & 0xFF) };
+                set_byte(temp_breakpoint_vaddr, 0xcc);
+
+                // lightweight cont()        
+                ptrace(PTRACE_CONT, pid_, nullptr, nullptr);
+                waitpid(pid_, &wait_status_, 0);
+
+                // lightweight del()
+                set_byte(temp_breakpoint_vaddr, temp_breakpoint_data);
+                set_reg(&regs_.rip, temp_breakpoint_vaddr + base_addr_);
+
                 return;
             } else {
-                ptrace(PTRACE_SINGLESTEP, pid_, nullptr, nullptr);
-                waitpid(pid_, &wait_status_, 0);
+                // not call
+                llvm::DWARFDebugLine::Row current_row{ get_src_row_info(current_inst_vaddr) };
+                if (current_row.File == start_row.File && current_row.Line > start_row.Line) { // todo: check if we exited current function & went to a function with larger vaddr
+                    return;
+                } else {
+                    ptrace(PTRACE_SINGLESTEP, pid_, nullptr, nullptr);
+                    waitpid(pid_, &wait_status_, 0);
+                }
             }
         }
     }
