@@ -204,6 +204,8 @@ namespace debugger
                     sys::path::filename(breakpoint->info.FileName).data(),
                     breakpoint->info.Line,
                     breakpoint->vaddr,
+                    breakpoint->vaddr,
+                    breakpoint->data,
                     breakpoint->data
                 );
             }
@@ -334,7 +336,7 @@ namespace debugger
     
     void Debugger::set_byte(word vaddr, byte val)
     {
-        word old_word{ ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_) };
+        word old_word{ static_cast<word>(ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_)) };
         word new_word{ (old_word & 0xffffffffffffff00) | val };
         ptrace(PTRACE_POKETEXT, pid_, vaddr + base_addr_, new_word);        
     }
