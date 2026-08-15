@@ -13,14 +13,14 @@ namespace debugger
         input_view_{},
         args_{},
         commands_{
-            { "run", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
-                // debugger.run();
-            } },
-            { "continue", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
-                debugger.cont();
+            { "backtrace", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
+                debugger.backtrace();
             } },
             { "break", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 debugger.breakpoint(args[1]);
+            } },
+            { "continue", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
+                debugger.cont();
             } },
             { "del", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 debugger.del(std::stoi(args[1].data()));
@@ -38,6 +38,9 @@ namespace debugger
                 } else {
                     debugger.print_reg(it->second);
                 }
+            } },
+            { "run", []([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
+                // debugger.run();
             } },
             { "set", [this]([[maybe_unused]] Debugger& debugger, [[maybe_unused]] const std::vector<std::string_view>& args) {
                 auto it{ this->regs_.find(args[1]) };
@@ -84,10 +87,10 @@ namespace debugger
 
         size_t start{};
         while (true) {
-            start = input_.find_first_not_of(' ', start);
+            start = input_view_.find_first_not_of(' ', start);
             if (start == std::string::npos) break;
 
-            size_t end{ input_.find(' ', start) };
+            size_t end{ input_view_.find(' ', start) };
             if (end == std::string::npos) {
                 args_.emplace_back(input_view_.substr(start));
                 break;
@@ -111,5 +114,26 @@ namespace debugger
             return;
         }
         it->second(debugger_, args_);
+    }
+    
+    void CLI::test()
+    {
+        const std::vector<std::string> commands{
+            "break test_program.cpp:11",
+            "continue",
+            "backtrace"
+        };
+        for (const std::string& command : commands) {
+            input_view_ = command;
+            split_input();
+            if (args_.empty()) continue;
+
+            auto it{ commands_.find(args_[0]) };
+            if (it == commands_.end()) {
+                printf("Unknown command.\n");
+                return;
+            }
+            it->second(debugger_, args_);
+        }
     }
 }

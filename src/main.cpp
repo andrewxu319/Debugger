@@ -55,6 +55,7 @@ int main(int argc, char* argv[]) {
         // sigaction(SIGINT, &sig_int_handler, nullptr);
 
         debugger.init();
+        cli.test();
         while (true) {
             cli.prompt();
         }

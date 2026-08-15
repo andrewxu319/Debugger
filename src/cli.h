@@ -16,6 +16,7 @@ namespace debugger {
         CLI(Debugger& debugger);
         void split_input();
         void prompt();
+        void test();
 
     private:
         Debugger& debugger_;
