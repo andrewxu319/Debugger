@@ -21,7 +21,7 @@ namespace debugger {
 
         Disassembler();
         
-        void setup(const llvm::object::ObjectFile* obj);
+        void setup(const llvm::object::ObjectFile* obj, const llvm::Triple& triple);
         Inst analyze_inst(word vaddr);
         bool is_call(const Inst& inst);
 

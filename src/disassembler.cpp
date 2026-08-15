@@ -14,7 +14,7 @@ namespace debugger
     {
     }
     
-    void Disassembler::setup(const llvm::object::ObjectFile* obj)
+    void Disassembler::setup(const object::ObjectFile* obj, const Triple& triple)
     {
         obj_ = obj;
 
@@ -23,10 +23,9 @@ namespace debugger
         InitializeNativeTargetAsmPrinter();
         
         // https://gist.github.com/larkmjc/d94b72fa3d580ea2037e0a4dc5e2fc5b
-        std::string triple{ obj_->makeTriple().getTriple() };
         std::string error{};
         const Target* target{ TargetRegistry::lookupTarget(triple, error) };
-        llvm::MCTargetOptions options{};
+        MCTargetOptions options{};
 
         try {
             reg_info_.reset(target->createMCRegInfo(triple));
@@ -39,7 +38,7 @@ namespace debugger
         } catch (const std::exception& exception) {
             logging::error(error);
         }
-        
+       
 
         // find .text section
         bool found{ false };

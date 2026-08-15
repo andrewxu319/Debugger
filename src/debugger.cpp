@@ -1,7 +1,12 @@
 #include "debugger.h"
 
+#include "utils/logging.h"
+#include "utils/reg_numbers.h"
+
 #include <llvm/DebugInfo/DWARF/DWARFAcceleratorTable.h>
 #include <llvm/DebugInfo/DWARF/DWARFCompileUnit.h>
+#include <llvm/DebugInfo/DWARF/DWARFDebugFrame.h>
+#include <llvm/DebugInfo/DWARF/LowLevel/DWARFUnwindTable.h>
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 
@@ -33,10 +38,20 @@ namespace debugger
         obj_file_ = std::move(*obj_file_expected);
         obj_ = obj_file_.getBinary();
         dwarf_ctx_ = DWARFContext::create(*obj_);
+        triple_ = obj_->makeTriple();
 
-        disassembler_.setup(obj_);
+        disassembler_.setup(obj_, triple_);
         
         build_msymtabs();
+
+        // get .eh_frame section (for stack tracing)
+        Expected<const DWARFDebugFrame*> eh_frame_expected = dwarf_ctx_->getEHFrame();
+        if (!eh_frame_expected) {
+            consumeError(eh_frame_expected.takeError());
+            logging::error();
+            return;
+        }
+        eh_frame_ = eh_frame_expected.get();
     }
 
     Debugger::~Debugger()
@@ -68,6 +83,7 @@ namespace debugger
         // need to check if debuggee was stopped by a sigtrap
 
         ptrace(PTRACE_CONT, pid_, nullptr, nullptr);
+        regs_updated_ = false;
         waitpid(pid_, &wait_status_, 0);
 
         // program  
@@ -183,6 +199,124 @@ namespace debugger
         }
     }
     
+    void Debugger::backtrace()
+    {
+        reg_read();
+        word v_rip{ regs_.rip - base_addr_ };
+
+        // find fde
+        const dwarf::FDE* fde{};
+        for (const dwarf::FrameEntry& entry : *eh_frame_) {
+            if (entry.getKind() == dwarf::FrameEntry::FrameKind::FK_FDE) {
+                const dwarf::FDE* current_fde{ static_cast<const dwarf::FDE*>(&entry) };
+                word start{ current_fde->getInitialLocation() };
+                word len{ current_fde->getAddressRange() };
+                if (v_rip >= start && v_rip < start + len) {
+                    fde = current_fde;
+                }
+            }
+        }
+        if (!fde) {
+            logging::error();
+        }
+
+        // unwind table
+        Expected<dwarf::UnwindTable> unwind_table_expected{ dwarf::createUnwindTable(fde) };
+        if (!unwind_table_expected) {
+            consumeError(unwind_table_expected.takeError());
+            logging::error();
+            return;
+        }
+        const dwarf::UnwindTable& unwind_table{ unwind_table_expected.get() };
+        const dwarf::UnwindRow* unwind_row{};
+        for (const dwarf::UnwindRow& current_row : unwind_table) {
+            if (current_row.getAddress() <= v_rip) { // check if this actually gets the virtual address
+                unwind_row = &current_row;
+            } else {
+                break;
+            }
+        }
+
+        // cfa (canonical frame address). caller address / stack pointer
+        const dwarf::UnwindLocation& cfa_rule{ unwind_row->getCFAValue() };
+        word cfa{ evaluate_cfa(cfa_rule) };
+
+        // // cie (common information entry)
+        const dwarf::CIE* cie{ fde->getLinkedCIE() };
+        word ra_reg{ cie->getReturnAddressRegister() };
+        auto ra_rule{ unwind_row->getRegisterLocations().getRegisterLocation(ra_reg) };
+        word ra{ evaluate_ra(ra_rule.value(), cfa, ra_reg) };
+        word v_ra{ ra - base_addr_};
+
+        printf("Caller address: 0x%016llX\n", v_ra);       
+    }
+    
+    word Debugger::evaluate_cfa(const llvm::dwarf::UnwindLocation& rule)
+    {
+        switch (rule.getLocation()) {
+        case dwarf::UnwindLocation::Location::Same:
+            reg_read();
+            return regs_.rax;
+        case dwarf::UnwindLocation::Location::CFAPlusOffset:
+            {
+                word val{ rule.getOffset() };
+                if (rule.getDereference()) {
+                    return ptrace(PTRACE_PEEKTEXT, pid_, val);
+                } else {
+                    return val;
+                }
+            }
+        case dwarf::UnwindLocation::Location::RegPlusOffset:
+            {
+                reg_read();
+                word reg_val{ regs_.*utils::reg_numbers_x86_64.at(rule.getRegister()) };
+                word val{ reg_val + rule.getOffset() };
+                if (rule.getDereference()) {
+                    return ptrace(PTRACE_PEEKTEXT, pid_, val);
+                } else {
+                    return val;
+                }
+            }
+        case dwarf::UnwindLocation::Location::Constant:
+            return static_cast<word>(rule.getOffset());
+        default:
+            logging::error();
+        }
+    }
+    
+    word Debugger::evaluate_ra(const llvm::dwarf::UnwindLocation& rule, word cfa, word ra_reg)
+    {
+        switch (rule.getLocation()) {
+        case dwarf::UnwindLocation::Location::Same:
+            reg_read();
+            return regs_.*utils::reg_numbers_x86_64.at(ra_reg);
+        case dwarf::UnwindLocation::Location::CFAPlusOffset:
+            {
+                word val{ cfa + rule.getOffset() };
+                if (rule.getDereference()) {
+                    return ptrace(PTRACE_PEEKTEXT, pid_, val);
+                } else {
+                    return val; // add base_addr_??
+                }
+            }
+        case dwarf::UnwindLocation::Location::RegPlusOffset:
+            {
+                reg_read();
+                word reg_val{ regs_.*utils::reg_numbers_x86_64.at(rule.getRegister()) };
+                word val{ reg_val + rule.getOffset() };
+                if (rule.getDereference()) {
+                    return ptrace(PTRACE_PEEKTEXT, pid_, val);
+                } else {
+                    return val;
+                }
+            }
+        case dwarf::UnwindLocation::Location::Constant:
+            return static_cast<word>(rule.getOffset());
+        default:
+            logging::error();
+        }
+    }
+    
     void Debugger::info(std::string_view cmd)
     {
         if (cmd == "break") {
@@ -202,10 +336,9 @@ namespace debugger
             printf("Breakpoints:\n");
             for (const std::unique_ptr<Breakpoint>& breakpoint : breakpoints_) {
                 printf(
-                    "File: %s, Line: %d, virtual address: 0x%016llX (%llu), byte data: 0x%02hhX (%hhu)\n",
+                    "File: %s, Line: %d, virtual address: 0x%016llX, byte data: 0x%02hhX (%hhu)\n",
                     sys::path::filename(breakpoint->info.FileName).data(),
                     breakpoint->info.Line,
-                    breakpoint->vaddr,
                     breakpoint->vaddr,
                     breakpoint->data,
                     breakpoint->data
@@ -240,6 +373,7 @@ namespace debugger
         llvm::DWARFDebugLine::Row start_row{ get_src_row_info(start_vaddr) };
         if (!step_through_breakpoint(start_vaddr)) {
             ptrace(PTRACE_SINGLESTEP, pid_, nullptr, nullptr);
+            regs_updated_ = false;
             waitpid(pid_, &wait_status_, 0);
         }
         while (true) {
@@ -256,6 +390,7 @@ namespace debugger
 
                 // lightweight cont()        
                 ptrace(PTRACE_CONT, pid_, nullptr, nullptr);
+                regs_updated_ = false;
                 waitpid(pid_, &wait_status_, 0);
 
                 // lightweight del()
@@ -270,6 +405,7 @@ namespace debugger
                     return;
                 } else {
                     ptrace(PTRACE_SINGLESTEP, pid_, nullptr, nullptr);
+                    regs_updated_ = false;
                     waitpid(pid_, &wait_status_, 0);
                 }
             }
@@ -354,7 +490,9 @@ namespace debugger
     
     void Debugger::reg_read()
     {
-        ptrace(PTRACE_GETREGS, pid_, nullptr, &regs_);
+        if (!regs_updated_) {
+            ptrace(PTRACE_GETREGS, pid_, nullptr, &regs_);
+        }
     }
     
     void Debugger::set_byte(word vaddr, byte val)
@@ -373,6 +511,7 @@ namespace debugger
             set_reg(&regs_.rip, v_rip_rewinded + base_addr_);
             set_byte(v_rip_rewinded, breakpoints_lookup_[v_rip_rewinded]->data);
             ptrace(PTRACE_SINGLESTEP, pid_, nullptr, nullptr);
+            regs_updated_ = false;
             waitpid(pid_, &wait_status_, 0);
             set_byte(v_rip_rewinded, 0xcc);
         }

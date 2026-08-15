@@ -5,6 +5,7 @@
 #include "utils/string_view_hash.h"
 
 #include <llvm/DebugInfo/DWARF/DWARFContext.h>
+#include <llvm/DebugInfo/DWARF/LowLevel/DWARFUnwindTable.h>
 #include <llvm/DebugInfo/Symbolize/Symbolize.h>
 #include <llvm/Demangle/Demangle.h>
 #include <llvm/Object/ObjectFile.h>
@@ -32,6 +33,7 @@ namespace debugger {
         void breakpoint(std::string_view arg);
         void breakpoint(std::string_view file_name, size_t line);
         void del(size_t idx);
+        void backtrace();
         void info(std::string_view cmd);
         void print_reg(const word* reg);
         void set_reg(word* reg, word data);
@@ -47,19 +49,24 @@ namespace debugger {
         void set_byte(word vaddr, byte val);
         bool step_through_breakpoint(word v_rip);
         llvm::DWARFDebugLine::Row get_src_row_info(word vaddr);
+        word evaluate_cfa(const llvm::dwarf::UnwindLocation& rule);
+        word evaluate_ra(const llvm::dwarf::UnwindLocation& rule, word cfa, word ra_reg);
 
         Disassembler disassembler_{};
 
         int pid_{};
         int wait_status_{};
         word base_addr_{};
+        bool regs_updated_{};
 
         llvm::object::OwningBinary<llvm::object::ObjectFile> obj_file_{};
         const llvm::object::ObjectFile* obj_{};
+        llvm::Triple triple_{};
         std::unique_ptr<llvm::DWARFContext> dwarf_ctx_{};
         llvm::ItaniumPartialDemangler demangler_{};
         llvm::symbolize::LLVMSymbolizer symbolizer_{};
         llvm::DWARFCompileUnit* current_cu_{}; // TODO: update the current cu if needed
+        const llvm::DWARFDebugFrame* eh_frame_{};
 
         llvm::SmallString<256> mangled_buffer_{};
         static constexpr size_t demangled_buffer_capacity_ = 128;
