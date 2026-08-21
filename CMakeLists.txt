@@ -5,7 +5,7 @@ Project(Debugger LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 
 #
-find_package(LLVM REQUIRED CONFIG) # version numbers dont work, but 21 or above is required
+find_package(LLVM 22.1 REQUIRED CONFIG) # version numbers dont work, but 21 or above is required
 
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
