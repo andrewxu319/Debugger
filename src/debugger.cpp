@@ -210,7 +210,6 @@ namespace debugger
     void Debugger::backtrace_recurse(word vaddr, size_t depth, const user_regs_struct& current_frame_regs)
     {
         constexpr size_t depth_limit{ 128 };
-        if (vaddr == 0 || depth >= depth_limit) return;
 
         // get function name & line number
         object::SectionedAddress sectioned_address{ vaddr, object::SectionedAddress::UndefSection };
@@ -220,7 +219,6 @@ namespace debugger
         }
         const llvm::DILineInfo& info{ info_expected.get() };
         std::string_view function_name{ info.FunctionName };
-        if (function_name == "main") return;
         printf(
             "#%d\tFunction name: %s, file name: %s, line %d, address 0x%016llX\n",
             depth,
@@ -286,7 +284,9 @@ namespace debugger
         word ra{ evaluate_location(ra_rule.value(), cfa, current_frame_regs, ra_reg) - 1 };
         word v_ra{ ra - base_addr_};
 
-        backtrace_recurse(v_ra, depth + 1, caller_frame_regs);
+        if (function_name != "main" && vaddr != 0 && depth < depth_limit) {
+            backtrace_recurse(v_ra, depth + 1, caller_frame_regs);
+        }
     }
     
     word Debugger::evaluate_location(const llvm::dwarf::UnwindLocation& rule, word cfa, const user_regs_struct& regs, uint32_t reg_number)
