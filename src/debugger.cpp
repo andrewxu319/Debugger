@@ -99,13 +99,13 @@ namespace debugger
     void Debugger::breakpoint(word vaddr)
     {
         object::SectionedAddress sectioned_address{ vaddr, object::SectionedAddress::UndefSection };
-        auto info{ symbolizer_.symbolizeCode(*obj_, sectioned_address) }; // this stores source file name and line number
-        if (!info) {
-            consumeError(info.takeError());
+        auto info_expected{ symbolizer_.symbolizeCode(*obj_, sectioned_address) }; // this stores source file name and line number
+        if (!info_expected) {
+            consumeError(info_expected.takeError());
         }
         
         breakpoints_.emplace_back(std::make_unique<Breakpoint>(
-            info.get(),
+            info_expected.get(),
             vaddr,
             static_cast<byte>(ptrace(PTRACE_PEEKTEXT, pid_, vaddr + base_addr_) & 0xFF)
         ));
@@ -203,6 +203,32 @@ namespace debugger
     {
         reg_read();
         word v_rip{ regs_.rip - base_addr_ };
+        
+        backtrace_recurse(v_rip, 0, regs_);
+    }
+    
+    void Debugger::backtrace_recurse(word vaddr, size_t depth, const user_regs_struct& current_frame_regs)
+    {
+        constexpr size_t depth_limit{ 128 };
+        if (vaddr == 0 || depth >= depth_limit) return;
+
+        // get function name & line number
+        object::SectionedAddress sectioned_address{ vaddr, object::SectionedAddress::UndefSection };
+        auto info_expected{ symbolizer_.symbolizeCode(*obj_, sectioned_address) }; // this stores source file name and line number
+        if (!info_expected) {
+            consumeError(info_expected.takeError());
+        }
+        const llvm::DILineInfo& info{ info_expected.get() };
+        std::string_view function_name{ info.FunctionName };
+        if (function_name == "main") return;
+        printf(
+            "#%d\tFunction name: %s, file name: %s, line %d, address 0x%016llX\n",
+            depth,
+            function_name.data(),
+            sys::path::filename(info.FileName).data(),
+            info.Line,
+            vaddr
+        );
 
         // find fde
         const dwarf::FDE* fde{};
@@ -211,13 +237,13 @@ namespace debugger
                 const dwarf::FDE* current_fde{ static_cast<const dwarf::FDE*>(&entry) };
                 word start{ current_fde->getInitialLocation() };
                 word len{ current_fde->getAddressRange() };
-                if (v_rip >= start && v_rip < start + len) {
+                if (vaddr >= start && vaddr < start + len) {
                     fde = current_fde;
                 }
             }
         }
         if (!fde) {
-            logging::error();
+            return;
         }
 
         // unwind table
@@ -230,7 +256,7 @@ namespace debugger
         const dwarf::UnwindTable& unwind_table{ unwind_table_expected.get() };
         const dwarf::UnwindRow* unwind_row{};
         for (const dwarf::UnwindRow& current_row : unwind_table) {
-            if (current_row.getAddress() <= v_rip) { // check if this actually gets the virtual address
+            if (current_row.getAddress() <= vaddr) { // check if this actually gets the virtual address
                 unwind_row = &current_row;
             } else {
                 break;
@@ -239,57 +265,35 @@ namespace debugger
 
         // cfa (canonical frame address). caller address / stack pointer
         const dwarf::UnwindLocation& cfa_rule{ unwind_row->getCFAValue() };
-        word cfa{ evaluate_cfa(cfa_rule) };
+
+        user_regs_struct caller_frame_regs{};
+        const dwarf::RegisterLocations& reg_locations{ unwind_row->getRegisterLocations() };
+        word cfa{ evaluate_location(cfa_rule, 0, current_frame_regs, 0) };
+        for (uint32_t reg_number : reg_locations.getRegisters())
+        {
+            std::optional<dwarf::UnwindLocation> location{ reg_locations.getRegisterLocation(reg_number) };
+            word reg_value{ evaluate_location(*location, cfa, current_frame_regs, reg_number) };
+
+            auto it{ utils::reg_numbers_x86_64.find(reg_number) };
+            caller_frame_regs.*(it->second) = reg_value;
+        }
+        caller_frame_regs.rsp = cfa; // if caller frame's cfa rule uses rsp
 
         // // cie (common information entry)
         const dwarf::CIE* cie{ fde->getLinkedCIE() };
         word ra_reg{ cie->getReturnAddressRegister() };
         auto ra_rule{ unwind_row->getRegisterLocations().getRegisterLocation(ra_reg) };
-        word ra{ evaluate_ra(ra_rule.value(), cfa, ra_reg) };
+        word ra{ evaluate_location(ra_rule.value(), cfa, current_frame_regs, ra_reg) - 1 };
         word v_ra{ ra - base_addr_};
 
-        printf("Caller address: 0x%016llX\n", v_ra);       
+        backtrace_recurse(v_ra, depth + 1, caller_frame_regs);
     }
     
-    word Debugger::evaluate_cfa(const llvm::dwarf::UnwindLocation& rule)
+    word Debugger::evaluate_location(const llvm::dwarf::UnwindLocation& rule, word cfa, const user_regs_struct& regs, uint32_t reg_number)
     {
         switch (rule.getLocation()) {
         case dwarf::UnwindLocation::Location::Same:
-            reg_read();
-            return regs_.rax;
-        case dwarf::UnwindLocation::Location::CFAPlusOffset:
-            {
-                word val{ rule.getOffset() };
-                if (rule.getDereference()) {
-                    return ptrace(PTRACE_PEEKTEXT, pid_, val);
-                } else {
-                    return val;
-                }
-            }
-        case dwarf::UnwindLocation::Location::RegPlusOffset:
-            {
-                reg_read();
-                word reg_val{ regs_.*utils::reg_numbers_x86_64.at(rule.getRegister()) };
-                word val{ reg_val + rule.getOffset() };
-                if (rule.getDereference()) {
-                    return ptrace(PTRACE_PEEKTEXT, pid_, val);
-                } else {
-                    return val;
-                }
-            }
-        case dwarf::UnwindLocation::Location::Constant:
-            return static_cast<word>(rule.getOffset());
-        default:
-            logging::error();
-        }
-    }
-    
-    word Debugger::evaluate_ra(const llvm::dwarf::UnwindLocation& rule, word cfa, word ra_reg)
-    {
-        switch (rule.getLocation()) {
-        case dwarf::UnwindLocation::Location::Same:
-            reg_read();
-            return regs_.*utils::reg_numbers_x86_64.at(ra_reg);
+            return regs.*utils::reg_numbers_x86_64.at(reg_number);
         case dwarf::UnwindLocation::Location::CFAPlusOffset:
             {
                 word val{ cfa + rule.getOffset() };
@@ -301,8 +305,7 @@ namespace debugger
             }
         case dwarf::UnwindLocation::Location::RegPlusOffset:
             {
-                reg_read();
-                word reg_val{ regs_.*utils::reg_numbers_x86_64.at(rule.getRegister()) };
+                word reg_val{ regs.*utils::reg_numbers_x86_64.at(rule.getRegister()) };
                 word val{ reg_val + rule.getOffset() };
                 if (rule.getDereference()) {
                     return ptrace(PTRACE_PEEKTEXT, pid_, val);

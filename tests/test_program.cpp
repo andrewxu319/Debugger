@@ -5,19 +5,24 @@
 using namespace std::chrono_literals;
 
 namespace namespace_0 {
-    void count_nested(int& counter)
+    void count_nested_1(int& counter)
     {
-        counter++;
         counter++;
         counter++;
         counter++;
         printf("ok\n");
     }
 
+    void count_nested_0(int& counter)
+    {
+        counter++;
+        count_nested_1(counter);
+    }
+
     void count(int& counter) {
         printf("namespace_0::count, %d\n", counter);
         std::this_thread::sleep_for(0.5s);
-        count_nested(counter);
+        count_nested_0(counter);
     }
 }
 

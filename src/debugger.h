@@ -34,6 +34,7 @@ namespace debugger {
         void breakpoint(std::string_view file_name, size_t line);
         void del(size_t idx);
         void backtrace();
+        void backtrace_recurse(word vaddr, size_t depth, const user_regs_struct& current_frame_regs);
         void info(std::string_view cmd);
         void print_reg(const word* reg);
         void set_reg(word* reg, word data);
@@ -49,8 +50,7 @@ namespace debugger {
         void set_byte(word vaddr, byte val);
         bool step_through_breakpoint(word v_rip);
         llvm::DWARFDebugLine::Row get_src_row_info(word vaddr);
-        word evaluate_cfa(const llvm::dwarf::UnwindLocation& rule);
-        word evaluate_ra(const llvm::dwarf::UnwindLocation& rule, word cfa, word ra_reg);
+        word evaluate_location(const llvm::dwarf::UnwindLocation& rule, word cfa, const user_regs_struct& regs, uint32_t reg_number);
 
         Disassembler disassembler_{};
 
